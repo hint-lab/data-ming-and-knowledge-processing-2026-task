@@ -1,19 +1,3 @@
-"""实验一 词向量表示与相似度分析 —— 核心代码
-
-做了什么
---------
-1. 读入训练集 CSV（Amazon Polarity 格式：label,title,text，label 1=负面 2=正面）；
-2. 用同一份语料、同一随机种子、同一批固定参数训练两个 Word2Vec 模型：window=2 与 window=5；
-3. 输出词对相似度表、10 个查询词的 Top-5 近邻表、两窗口对照表；
-4. 画一张"相关度图"：左图是 32 个代表词的二维位置（颜色=语义组），右图是去均值余弦热图；
-5. 导出 window=5 的 embedding.npy / vocab.json，供实验二 TextCNN 使用。
-
-运行
-----
-    python main.py --train-csv data/train_sample.csv --out-dir outputs
-
-依赖：gensim, numpy, scipy, scikit-learn, matplotlib
-"""
 from __future__ import annotations
 
 import argparse
@@ -34,8 +18,6 @@ from pathlib import Path
 
 import numpy as np
 
-# ---------------------------------------------------------------- 预处理契约
-# 与实验二共用同一套规则：转小写、HTML 反转义、去标签、保留否定词与英文缩写。
 TOKEN_RE = re.compile(r"[a-z]+(?:'[a-z]+)?|[0-9]+")
 TAG_RE = re.compile(r"<[^>]*>")
 
@@ -47,7 +29,6 @@ QUERIES = ["good", "bad", "great", "phone", "battery",
 PAIRS = [("good", "great"), ("good", "bad"), ("phone", "battery"),
          ("expensive", "cheap"), ("screen", "battery")]
 
-# 人工划分的语义组：用来检验"相关的词是不是挨在一起"。
 GROUPS = {
     "positive sentiment": ["good", "great", "best", "love", "excellent",
                            "wonderful", "perfect", "nice"],
@@ -60,15 +41,11 @@ GROUPS = {
 }
 COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf"]
 
-
 def tokenize(text: str) -> list[str]:
-    """lowercase -> strip HTML -> keep letters/numbers/apostrophes."""
     text = unicodedata.normalize("NFKC", html.unescape(str(text))).replace("\u2019", "'")
     return TOKEN_RE.findall(TAG_RE.sub(" ", text).lower())
 
-
 def read_reviews(path: Path):
-    """Yield (label, title, text) from an Amazon CSV, with or without a header."""
     with path.open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle)
         first = True
@@ -87,14 +64,10 @@ def read_reviews(path: Path):
                                  f"(line {reader.line_num})")
             yield int(row[0]), row[1].strip(), row[2].strip()
 
-
 def text_key(title: str, text: str) -> str:
-    """Model-visible text fingerprint, used to detect duplicates."""
     return hashlib.sha256(" ".join(tokenize(title + " " + text)).encode()).hexdigest()
 
-
 def load_corpus(path: Path, exclude: list[Path]):
-    """Return corpus/labels/frame-ish rows after dedupe and overlap check."""
     rows, seen = [], set()
     for label, title, text in read_reviews(path):
         key = text_key(title, text)
@@ -111,8 +84,6 @@ def load_corpus(path: Path, exclude: list[Path]):
         raise ValueError("训练集没有可用的英文词")
     return corpus, np.array([row[0] for row in rows])
 
-
-# ------------------------------------------------------------------- 训练
 def train(corpus, window: int, vector_size: int, epochs: int,
           min_count: int, seed: int):
     from gensim.models import Word2Vec
@@ -125,9 +96,7 @@ def train(corpus, window: int, vector_size: int, epochs: int,
                 compute_loss=True)
     return model, time.perf_counter() - started
 
-
 def export_handoff(model, folder: Path, seed: int):
-    """embedding.npy + vocab.json：行号即词 ID，PAD=0 全零，UNK=1 固定随机。"""
     words = ["<PAD>", "<UNK>"] + model.wv.index_to_key
     matrix = np.zeros((len(words), model.vector_size), dtype=np.float32)
     matrix[1] = np.random.default_rng(seed).normal(0, 0.05, model.vector_size)
@@ -139,10 +108,7 @@ def export_handoff(model, folder: Path, seed: int):
         "vector_size": model.vector_size}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8")
 
-
-# --------------------------------------------------------------- 相关度图
 def relatedness(model, words, groups, folder: Path, method: str, seed: int):
-    """左：二维位置图；右：去均值余弦热图。返回组内/组间统计。"""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -204,7 +170,6 @@ def relatedness(model, words, groups, folder: Path, method: str, seed: int):
     ax.set_aspect("equal", adjustable="datalim")
     ax.grid(alpha=0.2)
 
-    # 右图：减去本模型平均余弦，否则小语料上整张图都是同一种红。
     mean_similarity = float(sim[~np.eye(len(words), dtype=bool)].mean())
     heat = fig.add_subplot(grid[0, 1])
     centred = sim - mean_similarity
@@ -245,8 +210,6 @@ def relatedness(model, words, groups, folder: Path, method: str, seed: int):
             "gap": round(float(np.mean(intra) - np.mean(inter)), 4),
             "nearest_same_group": f"{nearest_same}/{len(words)}"}
 
-
-# -------------------------------------------------------------------- 主流程
 def main() -> int:
     parser = argparse.ArgumentParser(description="实验一：词向量表示与相似度分析")
     parser.add_argument("--train-csv", type=Path, required=True)
@@ -261,8 +224,6 @@ def main() -> int:
                         help="开发/测试文件，用于检查数据泄漏")
     args = parser.parse_args()
 
-    # gensim 的初始化依赖 Python 进程级字符串哈希；不固定它就无法逐位复现。
-    # 若当前哈希种子与 --seed 不一致，就带新环境把本脚本重新执行一次。
     if os.environ.get("PYTHONHASHSEED") != str(args.seed):
         env = dict(os.environ, PYTHONHASHSEED=str(args.seed))
         return subprocess.call([sys.executable, str(Path(__file__).resolve()),
@@ -351,7 +312,6 @@ def main() -> int:
         ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"完成，结果在 {args.out_dir}")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
